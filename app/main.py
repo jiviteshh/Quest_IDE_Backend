@@ -18,7 +18,7 @@ from app.routes.ai import router as ai_router
 # Parse allowed origins from environment variable or use defaults
 ALLOWED_ORIGINS_ENV = os.getenv(
     "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,https://quest-ide-frontend.vercel.app",
+    "http://localhost:5173,http://localhost:3000,https://quest-ide-frontend.vercel.app,https://quest-ide-frontend-git-main-jivinaragam-2921s-projects.vercel.app,https://paddle-comma-omnivore.ngrok-free.dev",
 )
 ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_ENV.split(",")]
 
@@ -33,8 +33,8 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],  # This already includes custom headers like x-user-api-key
 )
