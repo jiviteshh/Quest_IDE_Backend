@@ -4,12 +4,23 @@ AI Coding Judge — Application Entry Point
 Registers all routers and configures the FastAPI application instance.
 """
 
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes.health import router as health_router
 from app.routes.parser import router as parser_router
 from app.routes.judge import router as judge_router
 from app.routes.ai import router as ai_router
+
+# ---------------------------------------------------------------------------
+# CORS Configuration
+# ---------------------------------------------------------------------------
+# Parse allowed origins from environment variable or use defaults
+ALLOWED_ORIGINS_ENV = os.getenv(
+    "ALLOWED_ORIGINS",
+    "http://localhost:5173,http://localhost:3000,https://quest-ide-frontend.vercel.app",
+)
+ALLOWED_ORIGINS = [origin.strip() for origin in ALLOWED_ORIGINS_ENV.split(",")]
 
 # ---------------------------------------------------------------------------
 # Application instance
@@ -22,10 +33,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],  # This already includes custom headers like x-user-api-key
