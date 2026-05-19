@@ -50,11 +50,24 @@ class LLMProviderError(LLMServiceError):
     """Raised for upstream failures not caused by user input."""
 
 
-def _get_nvidia_client() -> OpenAI:
-    api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+def _get_nvidia_client(user_api_key: str | None = None) -> OpenAI:
+    """
+    Get OpenAI client with priority system:
+    1. User-provided API key (from x-user-api-key header)
+    2. Fallback to server-side NVIDIA_API_KEY from environment
+    
+    Args:
+        user_api_key: Optional API key provided by user via request header
+        
+    Raises:
+        LLMAuthenticationError: If no valid API key is available
+    """
+    # Priority 1: User-provided API key
+    api_key = (user_api_key or "").strip() or os.getenv("NVIDIA_API_KEY", "").strip()
+    
     if not api_key:
         raise LLMAuthenticationError(
-            "NVIDIA_API_KEY is missing. Add it to your environment or .env file."
+            "NVIDIA API key is missing. Please provide your API key or configure the server-side key."
         )
 
     try:
@@ -285,11 +298,24 @@ def _normalize_parsed_problem(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def parse_problem(problem_text: str) -> dict[str, Any]:
+def parse_problem(problem_text: str, user_api_key: str | None = None) -> dict[str, Any]:
+    """
+    Parse coding problem using NVIDIA LLM.
+    
+    Args:
+        problem_text: The problem statement to parse
+        user_api_key: Optional API key provided by user (from x-user-api-key header)
+        
+    Raises:
+        LLMServiceError: For validation or parsing errors
+        LLMAuthenticationError: For authentication failures
+        LLMRateLimitError: For rate limit errors
+        LLMProviderError: For upstream provider failures
+    """
     if not problem_text or len(problem_text.strip()) < 10:
         raise LLMServiceError("problem_text must be at least 10 characters.")
 
-    client = _get_nvidia_client()
+    client = _get_nvidia_client(user_api_key=user_api_key)
     logger.info("Parsing problem with NVIDIA model. length=%d", len(problem_text))
 
     try:

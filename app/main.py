@@ -28,7 +28,7 @@ app.add_middleware(
     ],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"],  # This already includes custom headers like x-user-api-key
 )
 
 # ---------------------------------------------------------------------------

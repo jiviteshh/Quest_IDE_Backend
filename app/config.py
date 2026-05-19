@@ -6,7 +6,8 @@ from __future__ import annotations
 import os
 
 # Provider endpoint and auth
-PISTON_URL = os.getenv("PISTON_URL", "http://localhost:2000/api/v2/execute")
+_piston_env = os.getenv("PISTON_URL", "http://16.112.68.119:2000")
+PISTON_URL = _piston_env if _piston_env.endswith("/api/v2/execute") else f"{_piston_env.rstrip('/')}/api/v2/execute"
 PISTON_API_KEY = os.getenv("PISTON_API_KEY", "")
 
 # Upstream execution timeout in seconds
@@ -23,7 +24,7 @@ LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "90"))
 # Language mapping kept provider-agnostic by using internal language IDs.
 # These IDs match common Judge0 ids, which eases future migration.
 LANGUAGE_MAP: dict[int, dict[str, str]] = {
-    71: {"language": "python", "version": "3.10.0"},
+    71: {"language": "python", "version": "3.12.0"},
     62: {"language": "java", "version": "15.0.2"},
-    54: {"language": "cpp", "version": "10.2.0"},
+    54: {"language": "c++", "version": "10.2.0"},
 }

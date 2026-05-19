@@ -1,6 +1,7 @@
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
+from typing import Optional
 
 from app.models.schemas import ProblemRequest
 from app.services.llm_service import (
@@ -16,10 +17,19 @@ router = APIRouter()
 
 
 @router.post("/parse-problem")
-def parse_problem_route(request: ProblemRequest):
+def parse_problem_route(
+    request: ProblemRequest,
+    x_user_api_key: Optional[str] = Header(None)
+):
+    """
+    Parse a coding problem statement.
+    
+    Supports BYOK (Bring Your Own Key) via x-user-api-key header.
+    If provided, user's API key takes priority over server-side key.
+    """
     logger.info("Received /parse-problem request")
     try:
-        result = parse_problem(request.problem_text)
+        result = parse_problem(request.problem_text, user_api_key=x_user_api_key)
     except LLMAuthenticationError as exc:
         logger.warning("LLM authentication error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

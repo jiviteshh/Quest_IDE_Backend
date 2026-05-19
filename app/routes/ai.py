@@ -3,6 +3,7 @@ AI Assistant Route
 ────────────────────────────────────────────────────────────────
 COMPLETELY SEPARATE from /judge/* and /parse-problem routes.
 Does NOT affect execution flow or testcase contracts.
+Supports BYOK (Bring Your Own Key) via x-user-api-key header.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -11,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
 from app.services.ai_service import AIAssistError, get_ai_assistance
@@ -43,10 +44,26 @@ class AIAssistResponse(BaseModel):
     summary="Get AI assistance (isolated from execution)",
     description=(
         "Provides AI-powered hints, explanations, bug finding, and complexity "
-        "analysis. This endpoint is completely isolated from code execution."
+        "analysis. This endpoint is completely isolated from code execution. "
+        "Supports BYOK via x-user-api-key header."
     ),
 )
-async def ai_assist(request: AIAssistRequest) -> AIAssistResponse:
+async def ai_assist(
+    request: AIAssistRequest,
+    x_user_api_key: Optional[str] = Header(None)
+) -> AIAssistResponse:
+    """
+    AI assistance endpoint.
+    
+    Supports BYOK (Bring Your Own Key) via x-user-api-key header.
+    If provided, user's API key takes priority over server-side key.
+    """
+    # Safe debug logging
+    if x_user_api_key:
+        logger.info("Received x-user-api-key header - using user-provided API key")
+    else:
+        logger.info("No x-user-api-key header - will use fallback server key")
+    
     try:
         result = get_ai_assistance(
             action=request.action,
@@ -57,6 +74,7 @@ async def ai_assist(request: AIAssistRequest) -> AIAssistResponse:
             failed_testcase=request.failed_testcase,
             last_verdict=request.last_verdict,
             context=request.context,
+            user_api_key=x_user_api_key,
         )
         return AIAssistResponse(**result)
     except AIAssistError as exc:

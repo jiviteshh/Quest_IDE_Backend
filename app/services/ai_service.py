@@ -1,17 +1,4 @@
-"""
-AI Assistant Service
-────────────────────────────────────────────────────────────────
-COMPLETELY ISOLATED from execution flow, parser, and judge.
-Uses the same NVIDIA LLM provider but with different prompts.
 
-Does NOT modify:
-- judge_service.py
-- evaluation_service.py
-- llm_service.py (parser)
-- testcase schema
-- execution contracts
-────────────────────────────────────────────────────────────────
-"""
 
 from __future__ import annotations
 
@@ -38,66 +25,160 @@ class AIAssistError(RuntimeError):
 
 
 # ── System prompts per action ────────────────────────────────
+# DESIGN: Concise, structured, developer-focused responses
+# Target: 3-8 lines, ~120 words max unless explicitly asked for detailed explanation
 
 PROMPTS: dict[str, str] = {
     "chat": (
-        "You are QuestIDE's contextual coding assistant inside an AI-native IDE. "
-        "Answer the user's current question using the provided workspace context: "
-        "problem statement, current code, selected language, latest run result, "
-        "latest submit result, failed testcase, stdout/stderr, and execution metadata. "
-        "Be practical, concise, and specific. Do not claim you executed code. "
-        "Never modify or invent hidden testcase data. When useful, include short "
-        "markdown sections and fenced code snippets."
+        "You are QuestIDE's AI debugging companion. Answer concisely and directly. "
+        "Use workspace context (code, failed testcases, execution results) to provide "
+        "actionable insights. Keep responses SHORT (3-8 lines). Use structured format: "
+        "⚠ Issue | Likely Cause | Fix | Edge Case. Never invent hidden testcase data. "
+        "Avoid essays — be sharp and specific."
     ),
     "hint": (
-        "You are a coding tutor. Given a problem description and user's code, "
-        "provide a SUBTLE HINT without revealing the full solution. "
-        "Guide the student toward the right approach. Be concise (2-4 sentences max)."
+        "Provide ONE subtle hint to guide the user without spoiling. Keep it 1-2 sentences. "
+        "Example: '⚠ Off-by-one error in loop condition' or '💡 Consider edge case: empty array'. "
+        "No lengthy explanations."
     ),
     "explain_approach": (
-        "You are a coding tutor. Given a problem description, explain the optimal "
-        "algorithmic approach step by step. Include: intuition, key observations, "
-        "data structures to use, and time/space complexity. Do NOT write code."
+        "Explain the optimal algorithm in 5-7 lines max. Format:\n"
+        "Approach: [name]\n"
+        "Intuition: [one sentence]\n"
+        "Complexity: O(time) / O(space)\n"
+        "Key insight: [one sentence]\n"
+        "Do NOT write code. Be concise."
     ),
     "optimize": (
-        "You are a code reviewer. Given a problem and user's code, suggest specific "
-        "optimizations. Focus on: algorithmic improvements, unnecessary operations, "
-        "better data structures. Be specific and actionable."
+        "Identify 1-3 specific optimizations. Format:\n"
+        "Current: O(time/space)\n"
+        "✅ Optimization: [specific fix]\n"
+        "Improvement: [new complexity]\n"
+        "Example: [tiny code snippet if helpful]\n"
+        "Keep total response under 100 words."
     ),
     "find_bug": (
-        "You are a debugging assistant. Given a problem, user's code, and a failed "
-        "testcase (input, expected output, actual output), identify the probable bug. "
-        "Explain: what went wrong, why, and how to fix it. Do NOT rewrite the full solution. "
-        "Do NOT expose hidden testcase data beyond what's shown."
+        "Analyze the failed testcase concisely. Format:\n"
+        "⚠ Issue: [what's wrong]\n"
+        "Cause: [why it fails]\n"
+        "Fix: [specific solution]\n"
+        "Example fix: [minimal code or logic change]\n"
+        "Keep under 80 words. Be direct."
     ),
     "complexity_analysis": (
-        "You are a complexity analyst. Given a problem and user's code, estimate: "
-        "1. Time Complexity (Big-O) "
-        "2. Space Complexity (Big-O) "
-        "Explain your reasoning briefly. Format the answer clearly."
+        "Provide complexity analysis concisely:\n"
+        "Time: O(...)\n"
+        "Space: O(...)\n"
+        "Reasoning: [one-sentence explanation]\n"
+        "Bottleneck: [where most time/space goes]\n"
+        "Total: 4-5 lines max."
     ),
     "explain_solution": (
-        "You are a coding tutor. The student's solution was ACCEPTED. "
-        "Explain: why this approach works, the intuition behind it, "
-        "edge cases it handles, and any alternative approaches. "
-        "This is a learning opportunity — be thorough but clear."
+        "Explain why the accepted solution works. Format:\n"
+        "Why it works: [one sentence intuition]\n"
+        "Key insight: [core observation]\n"
+        "Edge cases handled: [list 2-3]\n"
+        "Complexity: O(time/space)\n"
+        "Alternative: [brief mention of other approach]\n"
+        "Keep under 100 words."
     ),
     "generate_testcases": (
-        "You are a test engineer. Given a problem description, generate 3-5 additional "
-        "testcases focusing on: edge cases, boundary conditions, stress tests, and tricky inputs. "
-        "Format each testcase as:\n"
-        "Input:\n<stdin input>\n"
-        "Expected Output:\n<expected output>\n\n"
-        "Each input must be stdin-compatible (one value per line or space-separated as needed). "
-        "Each output must be the exact expected stdout."
+        "Generate 3-5 additional testcases. Format EXACTLY as:\n"
+        "Input:\n<stdin>\n"
+        "Expected Output:\n<output>\n\n"
+        "Focus on: edge cases (empty, single element), boundary conditions, duplicates, negatives. "
+        "Each input must be stdin-compatible. Each output must be exact expected stdout."
     ),
 }
 
 
-def _get_client() -> OpenAI:
-    api_key = os.getenv("NVIDIA_API_KEY", "").strip()
+def _remove_repeated_lines(text: str, max_repeats: int = 1) -> str:
+    """
+    Remove repeated or near-identical consecutive lines.
+    Prevents response loops like "The 0 is..." repeated endlessly.
+    """
+    lines = text.split('\n')
+    if not lines:
+        return text
+    
+    result = [lines[0]]
+    repeat_count = 0
+    
+    for i in range(1, len(lines)):
+        current = lines[i].strip()
+        previous = lines[i - 1].strip()
+        
+        # Check for exact match or very similar lines (>80% similarity)
+        if current and previous:
+            if current == previous:
+                repeat_count += 1
+                if repeat_count > max_repeats:
+                    continue  # Skip repeated line
+            else:
+                # Check for substring repetition (common word sequences)
+                if len(current) > 10 and current in previous or previous in current:
+                    repeat_count += 1
+                    if repeat_count > max_repeats:
+                        continue
+                repeat_count = 0
+        
+        result.append(lines[i])
+    
+    return '\n'.join(result)
+
+
+def _truncate_response(text: str, action: str) -> str:
+    """
+    Truncate responses to sensible limits based on action.
+    Prevents verbose/looping outputs.
+    """
+    # Target word counts per action (generous limits to allow structure)
+    limits: dict[str, int] = {
+        "chat": 150,
+        "hint": 60,
+        "explain_approach": 120,
+        "optimize": 100,
+        "find_bug": 100,
+        "complexity_analysis": 80,
+        "explain_solution": 150,
+        "generate_testcases": 2000,  # Testcases can be longer
+    }
+    
+    max_words = limits.get(action, 150)
+    words = text.split()
+    
+    if len(words) > max_words:
+        text = ' '.join(words[:max_words])
+        # Truncate at sentence boundary if possible
+        if '.' in text:
+            text = text.rsplit('.', 1)[0] + '.'
+    
+    return text
+
+
+def _get_client(user_api_key: Optional[str] = None) -> OpenAI:
+    """
+    Get OpenAI client with priority system:
+    1. User-provided API key (from x-user-api-key header)
+    2. Fallback to server-side NVIDIA_API_KEY from environment
+    
+    Args:
+        user_api_key: Optional API key provided by user via request header
+        
+    Raises:
+        AIAssistError: If no valid API key is available
+    """
+    # Priority 1: User-provided API key
+    api_key = (user_api_key or "").strip() or os.getenv("NVIDIA_API_KEY", "").strip()
+    
+    # Safe debug logging (never log full key)
+    if user_api_key:
+        logger.info("Using user-provided NVIDIA API key")
+    else:
+        logger.info("Using fallback server NVIDIA API key")
+    
     if not api_key:
-        raise AIAssistError("NVIDIA_API_KEY not configured.")
+        raise AIAssistError("NVIDIA_API_KEY not configured. Please provide your API key.")
     return OpenAI(base_url=NVIDIA_API_BASE_URL, api_key=api_key, timeout=LLM_TIMEOUT_SECONDS)
 
 
@@ -110,10 +191,14 @@ def get_ai_assistance(
     failed_testcase: Optional[dict[str, str]] = None,
     last_verdict: Optional[str] = None,
     context: Optional[dict[str, Any]] = None,
+    user_api_key: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Generate AI assistance content based on the requested action.
     This is ISOLATED from execution — it only generates text advice.
+    
+    Args:
+        user_api_key: Optional API key provided by user (from x-user-api-key header)
     """
     system_prompt = PROMPTS.get(action)
     if not system_prompt:
@@ -153,14 +238,27 @@ def get_ai_assistance(
         parts.append(
             "## Workspace Context JSON\n"
             "```json\n"
-            f"{json.dumps(context, ensure_ascii=False, indent=2, default=str)[:12000]}\n"
+            f"{json.dumps(context, ensure_ascii=False, indent=2, default=str)[:5000]}\n"
             "```\n"
         )
 
     user_message = "\n".join(parts)
 
-    client = _get_client()
+    client = _get_client(user_api_key=user_api_key)
     logger.info("AI assist request: action=%s, code_len=%d", action, len(user_code))
+
+    # Determine token limit based on action (optimize for latency)
+    max_tokens_map = {
+        "chat": 300,
+        "hint": 100,
+        "explain_approach": 250,
+        "optimize": 200,
+        "find_bug": 200,
+        "complexity_analysis": 150,
+        "explain_solution": 300,
+        "generate_testcases": 1500,
+    }
+    max_tokens = max_tokens_map.get(action, 300)
 
     try:
         response = client.chat.completions.create(
@@ -169,9 +267,9 @@ def get_ai_assistance(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.3,
-            top_p=0.9,
-            max_tokens=2048,
+            temperature=0.0,  # Deterministic, concise responses
+            top_p=1.0,
+            max_tokens=max_tokens,
         )
     except (AuthenticationError, RateLimitError, APIConnectionError, APIError) as exc:
         logger.error("AI assist LLM error: %s", exc)
@@ -182,9 +280,20 @@ def get_ai_assistance(
 
     content = (response.choices[0].message.content if response.choices else "") or ""
 
-    # Strip thinking tags if model uses them
+    # Post-process response for quality
     import re
+    
+    # Strip thinking tags if model uses them
     content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    
+    # Remove repetition (prevents loops like "The 0 is... The 0 is...")
+    content = _remove_repeated_lines(content, max_repeats=1)
+    
+    # Truncate to sensible limits per action
+    content = _truncate_response(content, action)
+    
+    # Final cleanup
+    content = content.strip()
 
     return {
         "content": content,
